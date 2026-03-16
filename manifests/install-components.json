@@ -82,6 +82,22 @@
       ]
     },
     {
+      "id": "lang:dart",
+      "family": "language",
+      "description": "Dart and Flutter-oriented engineering guidance. Currently resolves through the shared framework-language module.",
+      "modules": [
+        "framework-language"
+      ]
+    },
+    {
+      "id": "framework:flutter",
+      "family": "framework",
+      "description": "Flutter-focused engineering guidance with widget patterns, state management, and testing. Currently resolves through the shared framework-language module.",
+      "modules": [
+        "framework-language"
+      ]
+    },
+    {
       "id": "framework:react",
       "family": "framework",
       "description": "React-focused engineering guidance. Currently resolves through the shared framework-language module.",

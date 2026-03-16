@@ -105,6 +105,8 @@
       "paths": [
         "skills/backend-patterns",
         "skills/coding-standards",
+        "skills/flutter-patterns",
+        "skills/flutter-testing",
         "skills/frontend-patterns",
         "skills/frontend-slides",
         "skills/golang-patterns",
