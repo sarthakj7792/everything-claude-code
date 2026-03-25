@@ -197,6 +197,76 @@ void main() {
 }
 ```
 
+## ViewModel Testing with Provider + mockito
+
+```dart
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mockito/mockito.dart';
+
+class MockAuthRepository extends Mock implements AuthRepository {}
+
+void main() {
+  late MockAuthRepository mockRepository;
+  late LoginViewModel viewModel;
+
+  setUp(() {
+    mockRepository = MockAuthRepository();
+    viewModel = LoginViewModel(repository: mockRepository);
+  });
+
+  group('LoginViewModel', () {
+    test('login sets state to busy then idle on success', () async {
+      when(mockRepository.login(any, any))
+          .thenAnswer((_) async => testUser);
+
+      final states = <ViewState>[];
+      viewModel.addListener(() => states.add(viewModel.state));
+
+      final result = await viewModel.login('test@test.com', 'pass');
+
+      expect(result, true);
+      expect(states, [ViewState.busy, ViewState.idle]);
+    });
+
+    test('login sets state to error on failure', () async {
+      when(mockRepository.login(any, any))
+          .thenThrow(Exception('Invalid credentials'));
+
+      final result = await viewModel.login('bad@test.com', 'wrong');
+
+      expect(result, false);
+      expect(viewModel.state, ViewState.error);
+      expect(viewModel.errorMessage, isNotNull);
+    });
+  });
+}
+```
+
+## Widget Testing with Provider
+
+```dart
+testWidgets('LoginForm shows loading when ViewModel is busy', (tester) async {
+  final viewModel = LoginViewModel(repository: MockAuthRepository());
+
+  await tester.pumpWidget(
+    MaterialApp(
+      home: ChangeNotifierProvider.value(
+        value: viewModel,
+        child: const Scaffold(body: LoginForm()),
+      ),
+    ),
+  );
+
+  // Initialize responsive scaling if used
+  // Responsive.init(tester.element(find.byType(LoginForm)));
+
+  viewModel.state = ViewState.busy;
+  await tester.pump();
+
+  expect(find.byType(CircularProgressIndicator), findsOneWidget);
+});
+```
+
 ## Test Organization
 
 ```

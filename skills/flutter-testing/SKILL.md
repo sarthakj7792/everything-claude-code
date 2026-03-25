@@ -238,6 +238,87 @@ class FakeItemRepository implements ItemRepository {
 }
 ```
 
+### ViewModel Test with Provider (mockito)
+
+For MVVM + Provider projects using `mockito` instead of `mocktail`:
+
+```dart
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mockito/mockito.dart';
+
+class MockFeedRepository extends Mock implements FeedRepository {}
+
+void main() {
+  late MockFeedRepository mockRepo;
+  late FeedViewModel viewModel;
+
+  setUp(() {
+    mockRepo = MockFeedRepository();
+    viewModel = FeedViewModel(repository: mockRepo);
+  });
+
+  test('loadFeed transitions busy → idle on success', () async {
+    when(mockRepo.getFeed()).thenAnswer((_) async => [testFeedItem]);
+
+    final states = <ViewState>[];
+    viewModel.addListener(() => states.add(viewModel.state));
+
+    await viewModel.loadFeed();
+
+    expect(states, [ViewState.busy, ViewState.idle]);
+    expect(viewModel.items, [testFeedItem]);
+  });
+
+  test('loadFeed transitions busy → error on failure', () async {
+    when(mockRepo.getFeed()).thenThrow(Exception('Network error'));
+
+    await viewModel.loadFeed();
+
+    expect(viewModel.state, ViewState.error);
+    expect(viewModel.errorMessage, contains('Network error'));
+  });
+}
+```
+
+### Widget Test with ChangeNotifierProvider
+
+```dart
+testWidgets('FeedScreen shows items when loaded', (tester) async {
+  final viewModel = FeedViewModel(repository: MockFeedRepository());
+  viewModel.items = [testFeedItem];
+
+  await tester.pumpWidget(
+    MaterialApp(
+      home: ChangeNotifierProvider.value(
+        value: viewModel,
+        child: const Scaffold(body: FeedScreen()),
+      ),
+    ),
+  );
+
+  expect(find.byType(FeedCard), findsOneWidget);
+});
+```
+
+### Responsive Widget Test Setup
+
+When testing widgets that use responsive scaling extensions (.w, .h, .r, .sp), initialize the responsive system before assertions:
+
+```dart
+testWidgets('PrimaryButton renders correctly', (tester) async {
+  await tester.pumpWidget(
+    MaterialApp(home: Scaffold(body: Builder(
+      builder: (context) {
+        Responsive.init(context); // Initialize scaling
+        return PrimaryButton(label: 'Click', onPressed: () {});
+      },
+    ))),
+  );
+
+  expect(find.text('Click'), findsOneWidget);
+});
+```
+
 ### Golden Test Pattern
 
 ```dart

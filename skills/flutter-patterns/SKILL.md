@@ -171,6 +171,77 @@ Text('Title', style: textTheme.headlineMedium?.copyWith(color: colors.primary));
 
 ## Responsive Layouts
 
+### Responsive Scaling Extensions
+
+For pixel-perfect responsive design across device sizes, use scaling extensions based on a design baseline (e.g., iPhone 14 Pro Max — 430x932). Packages like `flutter_screenutil` provide this pattern, or implement custom extensions:
+
+```dart
+// Initialize once in the root widget
+ScreenUtil.init(context, designSize: const Size(430, 932));
+
+// Usage — all dimensions via extensions
+Padding(
+  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
+  child: Column(
+    children: [
+      CircleAvatar(radius: 24.r),
+      SizedBox(height: 12.h),
+      Text('Hello', style: TextStyle(fontSize: 16.sp)),
+      SizedBox(
+        width: double.infinity,
+        height: 44.h,
+        child: ElevatedButton(
+          onPressed: () {},
+          child: const Text('Continue'),
+        ),
+      ),
+    ],
+  ),
+);
+```
+
+| Extension | Purpose | Use For |
+|-----------|---------|---------|
+| `.w` | Width-scaled | Horizontal padding, widths, margins |
+| `.h` | Height-scaled | Vertical padding, heights, SizedBox |
+| `.r` | Radius-scaled | BorderRadius, icon sizes, CircleAvatar |
+| `.sp` | Font-scaled (capped) | All text font sizes |
+
+**Tablet dampening**: Use sqrt-based scaling on tablets to prevent UI from blowing up on large screens.
+
+**Rule**: All dimensions must use these extensions in production code — raw `double` values are forbidden.
+
+### Centralized Design Tokens
+
+Define all visual constants centrally — never use raw hex values, inline TextStyles, or magic numbers in widgets:
+
+```dart
+// AppColor — all project colors
+class AppColor {
+  static const Color primary = Color(0xFF664E3E);
+  static const Color background = Color(0xFFF4F4F4);
+  static const Color accent = Color(0xFFD8F2E0);
+  static const Color error = Color(0xFFE53935);
+}
+
+// AppTextStyle — pre-built text styles with responsive sizing
+class AppTextStyle {
+  static TextStyle heading = TextStyle(
+    fontFamily: 'CormorantGaramond',
+    fontSize: 24.sp,
+    fontWeight: FontWeight.w700,
+    color: AppColor.primary,
+  );
+  static TextStyle body = TextStyle(
+    fontFamily: 'Avenir',
+    fontSize: 16.sp,
+    fontWeight: FontWeight.w400,
+  );
+}
+```
+
+Use `AppColor.primary` and `AppTextStyle.heading` in widgets — this ensures consistency and makes design changes a single-file edit.
+
 ### LayoutBuilder for Adaptive UI
 
 ```dart
@@ -296,6 +367,79 @@ class MainActivity : FlutterActivity() {
     }
 }
 ```
+
+## MVVM + Provider Pattern
+
+An alternative to BLoC for teams preferring simpler state management:
+
+### BaseModel with ViewState
+
+```dart
+enum ViewState { idle, busy, error }
+
+class BaseModel with ChangeNotifier {
+  ViewState _state = ViewState.idle;
+  ViewState get state => _state;
+  set state(ViewState viewState) {
+    _state = viewState;
+    notifyListeners();
+  }
+}
+```
+
+### ViewModel Pattern
+
+```dart
+class FeedViewModel extends BaseModel {
+  final FeedRepository _repository;
+  List<FeedItem> items = [];
+  String? errorMessage;
+
+  FeedViewModel({required FeedRepository repository})
+      : _repository = repository;
+
+  Future<void> loadFeed() async {
+    state = ViewState.busy;
+    try {
+      items = await _repository.getFeed();
+      state = ViewState.idle;
+    } catch (e) {
+      errorMessage = e.toString();
+      state = ViewState.error;
+    }
+  }
+}
+```
+
+### Widget Binding
+
+```dart
+Consumer<FeedViewModel>(
+  builder: (context, model, child) => switch (model.state) {
+    ViewState.busy => const Center(child: CircularProgressIndicator()),
+    ViewState.error => ErrorWidget(message: model.errorMessage),
+    ViewState.idle => ListView.builder(
+      itemCount: model.items.length,
+      itemBuilder: (_, i) => FeedCard(item: model.items[i]),
+    ),
+  },
+)
+```
+
+## Shared Widget Library
+
+Build a set of reusable widgets in `lib/views/widgets/common/` (or equivalent) to enforce UI consistency:
+
+| Widget | Purpose | Key Props |
+|--------|---------|-----------|
+| `PrimaryButton` | Standard action button | `label`, `onPressed`, `isLoading`, `width` |
+| `CustomTextField` | Styled text input | `hint`, `controller`, `validator` |
+| `UserAvatar` | Profile image with fallback | `imageUrl`, `radius`, `initials` |
+| `TagChip` | Selectable tag | `label`, `isSelected`, `onTap` |
+| `SectionHeader` | Section title with optional action | `title`, `actionLabel`, `onAction` |
+| `AppBottomSheet` | Reusable modal sheet | `child`, `title` |
+
+**Rule**: Always check `common/` before building a new widget. Import and extend existing components first.
 
 ## Anti-Patterns to Avoid
 

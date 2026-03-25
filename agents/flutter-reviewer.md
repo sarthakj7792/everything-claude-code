@@ -88,6 +88,14 @@ Adapt to the project's chosen architecture (Clean Architecture, MVVM, feature-fi
 - **Mutations outside reactivity API** — State must only change through `@action`, `.value`, `.obs`, etc.; direct mutation bypasses tracking
 - **Missing computed state** — Derivable values should use the solution's computed mechanism, not be stored redundantly
 
+**Provider + ChangeNotifier (MVVM):**
+- **Missing BaseModel inheritance** — ViewModels must extend a BaseModel with ViewState (idle, busy, error), not manage booleans directly
+- **setState in ViewModel** — ViewModels must use `notifyListeners()` via the state setter, never call `setState` from UI code for business logic
+- **Missing Consumer scope** — `Consumer<ViewModel>` should wrap only the subtree that depends on that ViewModel's state
+- **Raw dimensions** — All sizes must use responsive extensions (.w, .h, .r, .sp); raw double values are forbidden
+- **Hardcoded colors/fonts** — Must use centralized AppColor and AppTextStyle constants, not inline Color() or TextStyle()
+- **Missing Responsive.init** — Tests must initialize the responsive system before rendering widgets that use scaling extensions
+
 **Cross-component dependencies:**
 - In **Riverpod**, `ref.watch` between providers is expected — flag only circular or tangled chains
 - In **BLoC**, blocs should not directly depend on other blocs — prefer shared repositories

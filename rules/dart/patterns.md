@@ -251,6 +251,263 @@ class Item with _$Item {
 }
 ```
 
+## State Management — Provider + ChangeNotifier (MVVM)
+
+For simpler projects or teams preferring MVVM over BLoC:
+
+### ViewState Enum
+
+```dart
+enum ViewState { idle, busy, error }
+```
+
+### BaseModel (ChangeNotifier)
+
+```dart
+class BaseModel with ChangeNotifier {
+  ViewState _state = ViewState.idle;
+
+  ViewState get state => _state;
+
+  set state(ViewState viewState) {
+    _state = viewState;
+    notifyListeners();
+  }
+}
+```
+
+### ViewModel
+
+```dart
+class LoginViewModel extends BaseModel {
+  final AuthRepository _repository;
+
+  LoginViewModel({required AuthRepository repository})
+      : _repository = repository;
+
+  String? errorMessage;
+
+  Future<bool> login(String email, String password) async {
+    state = ViewState.busy;
+    try {
+      await _repository.login(email, password);
+      state = ViewState.idle;
+      return true;
+    } catch (e) {
+      errorMessage = e.toString();
+      state = ViewState.error;
+      return false;
+    }
+  }
+}
+```
+
+### Consuming in Widgets
+
+```dart
+Consumer<LoginViewModel>(
+  builder: (context, model, child) {
+    if (model.state == ViewState.busy) {
+      return const CircularProgressIndicator();
+    }
+    if (model.state == ViewState.error) {
+      return ErrorBanner(message: model.errorMessage ?? 'Unknown error');
+    }
+    return LoginForm(onSubmit: model.login);
+  },
+)
+```
+
+### Provider Registration
+
+```dart
+MultiProvider(
+  providers: [
+    ChangeNotifierProvider(create: (_) => LoginViewModel(repository: sl())),
+    ChangeNotifierProvider(create: (_) => FeedViewModel(repository: sl())),
+    StreamProvider<InternetConnectionStatus>(
+      create: (_) => InternetConnectionChecker().onStatusChange,
+      initialData: InternetConnectionStatus.connected,
+    ),
+  ],
+  child: const App(),
+)
+```
+
+## Alternative Directory Structure — MVVM
+
+For projects using MVVM + Provider instead of Clean Architecture + BLoC:
+
+```
+lib/
+├── core/
+│   ├── network/               # Auth interceptor, session manager
+│   ├── services/              # Session management, DI setup
+│   └── di/                    # Service locator (get_it)
+├── models/                    # Data classes with fromJson/toJson
+├── services/                  # Repositories (API calls via APIBase)
+├── viewmodels/                # Business logic (extend BaseModel)
+│   └── base_model.dart
+├── views/
+│   ├── screens/               # Feature-organized screens
+│   └── widgets/common/        # App-wide reusable components
+├── shared/
+│   ├── constants/
+│   │   ├── api_constants.dart     # Centralized API routes
+│   │   ├── color_constants.dart   # AppColor palette
+│   │   └── style_constants.dart   # AppTextStyle (pre-built TextStyles)
+│   └── enums/
+│       └── view_state.dart
+├── utils/
+│   ├── routing/
+│   │   ├── routes.dart        # Named route strings
+│   │   └── router.dart        # Route generation
+│   ├── device/responsive.dart # Responsive scaling
+│   └── extensions/            # String, SizedBox extensions
+└── main.dart
+```
+
+## Centralized Networking — Dio APIBase
+
+```dart
+class APIBase {
+  final Dio _dio;
+
+  APIBase(this._dio);
+
+  Future<Response> getRequest(
+    String url, {
+    bool isAuthorizationRequired = true,
+    Map<String, dynamic>? queryParams,
+  }) async {
+    try {
+      return await _dio.get(
+        url,
+        queryParameters: queryParams,
+        options: Options(
+          headers: isAuthorizationRequired
+              ? {'Authorization': 'Bearer ${await _getToken()}'}
+              : null,
+        ),
+      );
+    } on DioException catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  Future<Response> postRequest(
+    String url, {
+    dynamic body,
+    bool isAuthorizationRequired = true,
+  }) async {
+    try {
+      return await _dio.post(
+        url,
+        data: body,
+        options: Options(
+          headers: isAuthorizationRequired
+              ? {'Authorization': 'Bearer ${await _getToken()}'}
+              : null,
+        ),
+      );
+    } on DioException catch (e) {
+      throw _handleError(e);
+    }
+  }
+}
+```
+
+### Centralized API Routes
+
+```dart
+class APIRoutes {
+  static const String baseUrl = String.fromEnvironment('API_BASE_URL');
+  static const String loginUser = '${baseUrl}auth/login';
+  static const String profileApi = '${baseUrl}user/profile';
+  static const String feed = '${baseUrl}feed';
+  // All endpoints defined here — no hardcoded URLs in repositories
+}
+```
+
+## Responsive Scaling Extensions
+
+For consistent responsive sizing across phones and tablets, use scaling extensions based on a design baseline (e.g., iPhone 14 Pro Max — 430x932):
+
+```dart
+extension ResponsiveExtension on num {
+  /// Width-scaled — for horizontal padding, widths, margins
+  double get w => this * (screenWidth / designWidth);
+
+  /// Height-scaled — for vertical padding, heights
+  double get h => this * (screenHeight / designHeight);
+
+  /// Radius-scaled — for BorderRadius, icon sizes, CircleAvatar
+  double get r => this * _radiusScale;
+
+  /// Font-size scaled — with max cap to prevent oversizing
+  double get sp => this * min(_fontScale, 1.3);
+}
+```
+
+### Usage
+
+```dart
+// GOOD — responsive dimensions
+Padding(padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h));
+BorderRadius.circular(12.r);
+Text('Hello', style: TextStyle(fontSize: 14.sp));
+SizedBox(height: 20.h, width: 100.w);
+
+// BAD — raw values
+Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8));
+```
+
+Packages like `flutter_screenutil` provide this pattern out of the box.
+
+## Centralized Design Tokens
+
+### Color Constants
+
+```dart
+class AppColor {
+  static const Color primary = Color(0xFF664E3E);
+  static const Color background = Color(0xFFF4F4F4);
+  static const Color accent = Color(0xFFD8F2E0);
+  static const Color error = Color(0xFFE53935);
+  static const Color textPrimary = Color(0xFF212121);
+  static const Color textSecondary = Color(0xFF757575);
+  // All project colors defined here — never use raw hex in widgets
+}
+```
+
+### Text Style Constants
+
+```dart
+class AppTextStyle {
+  static TextStyle heading = TextStyle(
+    fontFamily: 'CormorantGaramond',
+    fontSize: 24.sp,
+    fontWeight: FontWeight.w700,
+    color: AppColor.primary,
+  );
+
+  static TextStyle body = TextStyle(
+    fontFamily: 'Avenir',
+    fontSize: 16.sp,
+    fontWeight: FontWeight.w400,
+    color: AppColor.textPrimary,
+  );
+
+  static TextStyle caption = TextStyle(
+    fontFamily: 'Avenir',
+    fontSize: 12.sp,
+    fontWeight: FontWeight.w300,
+    color: AppColor.textSecondary,
+  );
+  // Pre-built styles for consistency — never create inline TextStyle in widgets
+}
+```
+
 ## References
 
 See skill: `flutter-patterns` for detailed widget composition, performance, and theming patterns.

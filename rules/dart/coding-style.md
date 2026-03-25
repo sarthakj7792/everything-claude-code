@@ -135,6 +135,26 @@ try {
 final user = await repository.findUser(id); // returns User?
 ```
 
+## Responsive Sizing
+
+When using responsive scaling (e.g., `flutter_screenutil` or custom extensions):
+
+- Use `.w` for horizontal dimensions, `.h` for vertical, `.r` for radius/icon sizes, `.sp` for font sizes
+- Never use raw `double` values for dimensions in production widgets
+- Initialize the responsive system once in the root widget before use
+- Cap font scaling (e.g., max 1.3x) to prevent oversized text on tablets
+- Use sqrt-dampened scaling for tablets to prevent UI blowup
+
+```dart
+// BAD — raw values
+Padding(padding: EdgeInsets.all(16));
+Text('Hello', style: TextStyle(fontSize: 14));
+
+// GOOD — responsive extensions
+Padding(padding: EdgeInsets.all(16.w));
+Text('Hello', style: TextStyle(fontSize: 14.sp));
+```
+
 ## Extension Methods
 
 Use extensions for utility operations, but keep them discoverable:

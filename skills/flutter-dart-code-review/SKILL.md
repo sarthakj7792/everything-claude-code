@@ -136,6 +136,15 @@ class UserError extends UserState {
 // Use your solution's observable/signal to wrap status and data separately
 ```
 
+### MVVM + Provider pattern:
+- [ ] ViewModels extend `BaseModel` (ChangeNotifier) with `ViewState` enum (idle, busy, error) — no boolean flag soup
+- [ ] ViewModels never call UI APIs (no `showDialog`, `Navigator.push` from ViewModel — use callbacks)
+- [ ] `Consumer<ViewModel>` scoped narrowly to avoid rebuilding unrelated subtrees
+- [ ] Responsive extensions (.w, .h, .r, .sp) used for all dimensions — no raw double values in production
+- [ ] Colors from centralized `AppColor` constants — no inline `Color(0xFF...)` in widgets
+- [ ] Text styles from centralized `AppTextStyle` constants — no inline `TextStyle(...)` with raw font sizes
+- [ ] Shared widget library (`widgets/common/`) checked before creating new UI components
+
 ### Rebuild optimization:
 - [ ] State consumer widgets (Builder, Consumer, Observer, Obx, Watch, etc.) scoped as narrow as possible
 - [ ] Selectors used to rebuild only when specific fields change — not on every state emission
