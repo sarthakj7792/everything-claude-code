@@ -10,6 +10,8 @@ const COMPONENT_FAMILY_PREFIXES = {
   language: 'lang:',
   framework: 'framework:',
   capability: 'capability:',
+  agent: 'agent:',
+  skill: 'skill:',
 };
 const LEGACY_COMPAT_BASE_MODULE_IDS_BY_TARGET = Object.freeze({
   claude: [
@@ -35,6 +37,8 @@ const LEGACY_COMPAT_BASE_MODULE_IDS_BY_TARGET = Object.freeze({
   ],
 });
 const LEGACY_LANGUAGE_ALIAS_TO_CANONICAL = Object.freeze({
+  cpp: 'cpp',
+  csharp: 'csharp',
   go: 'go',
   golang: 'go',
   java: 'java',
@@ -43,15 +47,19 @@ const LEGACY_LANGUAGE_ALIAS_TO_CANONICAL = Object.freeze({
   perl: 'perl',
   php: 'php',
   python: 'python',
+  rust: 'rust',
   swift: 'swift',
   typescript: 'typescript',
 });
 const LEGACY_LANGUAGE_EXTRA_MODULE_IDS = Object.freeze({
+  cpp: ['framework-language'],
+  csharp: ['framework-language'],
   go: ['framework-language'],
   java: ['framework-language'],
   perl: [],
   php: [],
   python: ['framework-language'],
+  rust: ['framework-language'],
   swift: [],
   typescript: ['framework-language'],
 });

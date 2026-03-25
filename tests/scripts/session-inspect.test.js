@@ -8,9 +8,23 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
+const { getFallbackSessionRecordingPath } = require('../../scripts/lib/session-adapters/canonical-session');
+
 const SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'session-inspect.js');
 
 function run(args = [], options = {}) {
+  const envOverrides = {
+    ...(options.env || {})
+  };
+
+  if (typeof envOverrides.HOME === 'string' && !('USERPROFILE' in envOverrides)) {
+    envOverrides.USERPROFILE = envOverrides.HOME;
+  }
+
+  if (typeof envOverrides.USERPROFILE === 'string' && !('HOME' in envOverrides)) {
+    envOverrides.HOME = envOverrides.USERPROFILE;
+  }
+
   try {
     const stdout = execFileSync('node', [SCRIPT, ...args], {
       encoding: 'utf8',
@@ -19,7 +33,7 @@ function run(args = [], options = {}) {
       cwd: options.cwd || process.cwd(),
       env: {
         ...process.env,
-        ...(options.env || {})
+        ...envOverrides
       }
     });
     return { code: 0, stdout, stderr: '' };
@@ -67,6 +81,7 @@ function runTests() {
 
   if (test('prints canonical JSON for claude history targets', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-session-inspect-home-'));
+    const recordingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-session-inspect-recordings-'));
     const sessionsDir = path.join(homeDir, '.claude', 'sessions');
     fs.mkdirSync(sessionsDir, { recursive: true });
 
@@ -77,16 +92,24 @@ function runTests() {
       );
 
       const result = run(['claude:latest'], {
-        env: { HOME: homeDir }
+        env: {
+          HOME: homeDir,
+          ECC_SESSION_RECORDING_DIR: recordingDir
+        }
       });
 
       assert.strictEqual(result.code, 0, result.stderr);
       const payload = JSON.parse(result.stdout);
+      const recordingPath = getFallbackSessionRecordingPath(payload, { recordingDir });
+      const persisted = JSON.parse(fs.readFileSync(recordingPath, 'utf8'));
       assert.strictEqual(payload.adapterId, 'claude-history');
       assert.strictEqual(payload.session.kind, 'history');
       assert.strictEqual(payload.workers[0].branch, 'feat/session-inspect');
+      assert.strictEqual(persisted.latest.adapterId, 'claude-history');
+      assert.strictEqual(persisted.history.length, 1);
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
+      fs.rmSync(recordingDir, { recursive: true, force: true });
     }
   })) passed++; else failed++;
 
