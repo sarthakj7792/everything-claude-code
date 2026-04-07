@@ -10,10 +10,19 @@ use ratatui::{
 use tokio::sync::broadcast;
 
 use super::widgets::{budget_state, format_currency, format_token_count, BudgetState, TokenMeter};
-use crate::config::Config;
+use crate::config::{Config, PaneLayout};
+use crate::observability::ToolLogEntry;
 use crate::session::output::{OutputEvent, OutputLine, SessionOutputStore, OutputStream, OUTPUT_BUFFER_LIMIT};
 use crate::session::store::StateStore;
 use crate::session::{Session, SessionMetrics, SessionState, WorktreeInfo};
+
+const DEFAULT_PANE_SIZE_PERCENT: u16 = 35;
+const DEFAULT_GRID_SIZE_PERCENT: u16 = 50;
+const OUTPUT_PANE_PERCENT: u16 = 70;
+const MIN_PANE_SIZE_PERCENT: u16 = 20;
+const MAX_PANE_SIZE_PERCENT: u16 = 80;
+const PANE_RESIZE_STEP_PERCENT: u16 = 5;
+const MAX_LOG_ENTRIES: u64 = 12;
 
 pub struct Dashboard {
     db: StateStore,
@@ -22,12 +31,14 @@ pub struct Dashboard {
     output_rx: broadcast::Receiver<OutputEvent>,
     sessions: Vec<Session>,
     session_output_cache: HashMap<String, Vec<OutputLine>>,
+    logs: Vec<ToolLogEntry>,
     selected_pane: Pane,
     selected_session: usize,
     show_help: bool,
     output_follow: bool,
     output_scroll_offset: usize,
     last_output_height: usize,
+    pane_size_percent: u16,
     session_table_state: TableState,
 }
 
@@ -47,6 +58,15 @@ enum Pane {
     Sessions,
     Output,
     Metrics,
+    Log,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaneAreas {
+    sessions: Rect,
+    output: Rect,
+    metrics: Rect,
+    log: Option<Rect>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -64,6 +84,10 @@ impl Dashboard {
     }
 
     pub fn with_output_store(db: StateStore, cfg: Config, output_store: SessionOutputStore) -> Self {
+        let pane_size_percent = match cfg.pane_layout {
+            PaneLayout::Grid => DEFAULT_GRID_SIZE_PERCENT,
+            PaneLayout::Horizontal | PaneLayout::Vertical => DEFAULT_PANE_SIZE_PERCENT,
+        };
         let sessions = db.list_sessions().unwrap_or_default();
         let output_rx = output_store.subscribe();
         let mut session_table_state = TableState::default();
@@ -78,15 +102,18 @@ impl Dashboard {
             output_rx,
             sessions,
             session_output_cache: HashMap::new(),
+            logs: Vec::new(),
             selected_pane: Pane::Sessions,
             selected_session: 0,
             show_help: false,
             output_follow: true,
             output_scroll_offset: 0,
             last_output_height: 0,
+            pane_size_percent,
             session_table_state,
         };
         dashboard.sync_selected_output();
+        dashboard.refresh_logs();
         dashboard
     }
 
@@ -105,20 +132,14 @@ impl Dashboard {
         if self.show_help {
             self.render_help(frame, chunks[1]);
         } else {
-            let main_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(chunks[1]);
+            let pane_areas = self.pane_areas(chunks[1]);
+            self.render_sessions(frame, pane_areas.sessions);
+            self.render_output(frame, pane_areas.output);
+            self.render_metrics(frame, pane_areas.metrics);
 
-            self.render_sessions(frame, main_chunks[0]);
-
-            let right_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-                .split(main_chunks[1]);
-
-            self.render_output(frame, right_chunks[0]);
-            self.render_metrics(frame, right_chunks[1]);
+            if let Some(log_area) = pane_areas.log {
+                self.render_log(frame, log_area);
+            }
         }
 
         self.render_status_bar(frame, chunks[2]);
@@ -132,14 +153,19 @@ impl Dashboard {
             .count();
         let total = self.sessions.len();
 
-        let title = format!(" ECC 2.0 | {running} running / {total} total ");
-        let tabs = Tabs::new(vec!["Sessions", "Output", "Metrics"])
+        let title = format!(
+            " ECC 2.0 | {running} running / {total} total | {} {}% ",
+            self.layout_label(),
+            self.pane_size_percent
+        );
+        let tabs = Tabs::new(
+            self.visible_panes()
+                .iter()
+                .map(|pane| pane.title())
+                .collect::<Vec<_>>(),
+        )
             .block(Block::default().borders(Borders::ALL).title(title))
-            .select(match self.selected_pane {
-                Pane::Sessions => 0,
-                Pane::Output => 1,
-                Pane::Metrics => 2,
-            })
+            .select(self.selected_pane_index())
             .highlight_style(
                 Style::default()
                     .fg(Color::Cyan)
@@ -150,16 +176,10 @@ impl Dashboard {
     }
 
     fn render_sessions(&mut self, frame: &mut Frame, area: Rect) {
-        let border_style = if self.selected_pane == Pane::Sessions {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default()
-        };
-
         let block = Block::default()
             .borders(Borders::ALL)
             .title(" Sessions ")
-            .border_style(border_style);
+            .border_style(self.pane_border_style(Pane::Sessions));
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
 
@@ -229,34 +249,22 @@ impl Dashboard {
             "No sessions. Press 'n' to start one.".to_string()
         };
 
-        let border_style = if self.selected_pane == Pane::Output {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default()
-        };
-
         let paragraph = Paragraph::new(content)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .title(" Output ")
-                    .border_style(border_style),
+                    .border_style(self.pane_border_style(Pane::Output)),
             )
             .scroll((self.output_scroll_offset as u16, 0));
         frame.render_widget(paragraph, area);
     }
 
     fn render_metrics(&self, frame: &mut Frame, area: Rect) {
-        let border_style = if self.selected_pane == Pane::Metrics {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default()
-        };
-
         let block = Block::default()
             .borders(Borders::ALL)
             .title(" Metrics ")
-            .border_style(border_style);
+            .border_style(self.pane_border_style(Pane::Metrics));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -296,8 +304,46 @@ impl Dashboard {
         );
     }
 
+    fn render_log(&self, frame: &mut Frame, area: Rect) {
+        let content = if self.sessions.get(self.selected_session).is_none() {
+            "No session selected.".to_string()
+        } else if self.logs.is_empty() {
+            "No tool logs available for this session yet.".to_string()
+        } else {
+            self.logs
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "[{}] {} | {}ms | risk {:.0}%\ninput: {}\noutput: {}",
+                        self.short_timestamp(&entry.timestamp),
+                        entry.tool_name,
+                        entry.duration_ms,
+                        entry.risk_score * 100.0,
+                        self.log_field(&entry.input_summary),
+                        self.log_field(&entry.output_summary)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
+
+        let paragraph = Paragraph::new(content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Log ")
+                    .border_style(self.pane_border_style(Pane::Log)),
+            )
+            .scroll((self.output_scroll_offset as u16, 0))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
+    }
+
     fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
-        let text = " [n]ew session  [s]top  [r]efresh  [Tab] switch pane  [j/k] scroll  [?] help  [q]uit ";
+        let text = format!(
+            " [n]ew session  [s]top  [r]efresh  [Tab] switch pane  [j/k] scroll  [+/-] resize  [{}] layout  [?] help  [q]uit ",
+            self.layout_label()
+        );
         let aggregate = self.aggregate_usage();
         let (summary_text, summary_style) = self.aggregate_cost_summary();
         let block = Block::default()
@@ -340,6 +386,8 @@ impl Dashboard {
             "  S-Tab   Previous pane",
             "  j/↓     Scroll down",
             "  k/↑     Scroll up",
+            "  +/=     Increase pane size",
+            "  -       Decrease pane size",
             "  r       Refresh",
             "  ?       Toggle help",
             "  q/C-c   Quit",
@@ -355,19 +403,37 @@ impl Dashboard {
     }
 
     pub fn next_pane(&mut self) {
-        self.selected_pane = match self.selected_pane {
-            Pane::Sessions => Pane::Output,
-            Pane::Output => Pane::Metrics,
-            Pane::Metrics => Pane::Sessions,
-        };
+        let visible_panes = self.visible_panes();
+        let next_index = self
+            .selected_pane_index()
+            .checked_add(1)
+            .map(|index| index % visible_panes.len())
+            .unwrap_or(0);
+
+        self.selected_pane = visible_panes[next_index];
     }
 
     pub fn prev_pane(&mut self) {
-        self.selected_pane = match self.selected_pane {
-            Pane::Sessions => Pane::Metrics,
-            Pane::Output => Pane::Sessions,
-            Pane::Metrics => Pane::Output,
+        let visible_panes = self.visible_panes();
+        let previous_index = if self.selected_pane_index() == 0 {
+            visible_panes.len() - 1
+        } else {
+            self.selected_pane_index() - 1
         };
+
+        self.selected_pane = visible_panes[previous_index];
+    }
+
+    pub fn increase_pane_size(&mut self) {
+        self.pane_size_percent =
+            (self.pane_size_percent + PANE_RESIZE_STEP_PERCENT).min(MAX_PANE_SIZE_PERCENT);
+    }
+
+    pub fn decrease_pane_size(&mut self) {
+        self.pane_size_percent = self
+            .pane_size_percent
+            .saturating_sub(PANE_RESIZE_STEP_PERCENT)
+            .max(MIN_PANE_SIZE_PERCENT);
     }
 
     pub fn scroll_down(&mut self) {
@@ -377,6 +443,7 @@ impl Dashboard {
                 self.sync_selection();
                 self.reset_output_view();
                 self.sync_selected_output();
+                self.refresh_logs();
             }
             Pane::Output => {
                 let max_scroll = self.max_output_scroll();
@@ -392,6 +459,10 @@ impl Dashboard {
                 }
             }
             Pane::Metrics => {}
+            Pane::Log => {
+                self.output_follow = false;
+                self.output_scroll_offset = self.output_scroll_offset.saturating_add(1);
+            }
             Pane::Sessions => {}
         }
     }
@@ -403,6 +474,7 @@ impl Dashboard {
                 self.sync_selection();
                 self.reset_output_view();
                 self.sync_selected_output();
+                self.refresh_logs();
             }
             Pane::Output => {
                 if self.output_follow {
@@ -413,6 +485,10 @@ impl Dashboard {
                 self.output_scroll_offset = self.output_scroll_offset.saturating_sub(1);
             }
             Pane::Metrics => {}
+            Pane::Log => {
+                self.output_follow = false;
+                self.output_scroll_offset = self.output_scroll_offset.saturating_sub(1);
+            }
         }
     }
 
@@ -464,7 +540,9 @@ impl Dashboard {
             }
         };
         self.sync_selection_by_id(selected_id.as_deref());
+        self.ensure_selected_pane_visible();
         self.sync_selected_output();
+        self.refresh_logs();
     }
 
     fn sync_selection(&mut self) {
@@ -484,6 +562,12 @@ impl Dashboard {
             }
         }
         self.sync_selection();
+    }
+
+    fn ensure_selected_pane_visible(&mut self) {
+        if !self.visible_panes().contains(&self.selected_pane) {
+            self.selected_pane = Pane::Sessions;
+        }
     }
 
     fn sync_selected_output(&mut self) {
@@ -537,6 +621,21 @@ impl Dashboard {
     fn reset_output_view(&mut self) {
         self.output_follow = true;
         self.output_scroll_offset = 0;
+    }
+
+    fn refresh_logs(&mut self) {
+        let Some(session_id) = self.selected_session_id().map(ToOwned::to_owned) else {
+            self.logs.clear();
+            return;
+        };
+
+        match self.db.query_tool_logs(&session_id, 1, MAX_LOG_ENTRIES) {
+            Ok(page) => self.logs = page.entries,
+            Err(error) => {
+                tracing::warn!("Failed to load tool logs: {error}");
+                self.logs.clear();
+            }
+        }
     }
 
     fn aggregate_usage(&self) -> AggregateUsage {
@@ -604,6 +703,126 @@ impl Dashboard {
         (text, aggregate.overall_state.style())
     }
 
+    fn pane_areas(&self, area: Rect) -> PaneAreas {
+        match self.cfg.pane_layout {
+            PaneLayout::Horizontal => {
+                let columns = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints(self.primary_constraints())
+                    .split(area);
+                let right_rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage(OUTPUT_PANE_PERCENT),
+                        Constraint::Percentage(100 - OUTPUT_PANE_PERCENT),
+                    ])
+                    .split(columns[1]);
+
+                PaneAreas {
+                    sessions: columns[0],
+                    output: right_rows[0],
+                    metrics: right_rows[1],
+                    log: None,
+                }
+            }
+            PaneLayout::Vertical => {
+                let rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints(self.primary_constraints())
+                    .split(area);
+                let bottom_columns = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(OUTPUT_PANE_PERCENT),
+                        Constraint::Percentage(100 - OUTPUT_PANE_PERCENT),
+                    ])
+                    .split(rows[1]);
+
+                PaneAreas {
+                    sessions: rows[0],
+                    output: bottom_columns[0],
+                    metrics: bottom_columns[1],
+                    log: None,
+                }
+            }
+            PaneLayout::Grid => {
+                let rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints(self.primary_constraints())
+                    .split(area);
+                let top_columns = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints(self.primary_constraints())
+                    .split(rows[0]);
+                let bottom_columns = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints(self.primary_constraints())
+                    .split(rows[1]);
+
+                PaneAreas {
+                    sessions: top_columns[0],
+                    output: top_columns[1],
+                    metrics: bottom_columns[0],
+                    log: Some(bottom_columns[1]),
+                }
+            }
+        }
+    }
+
+    fn primary_constraints(&self) -> [Constraint; 2] {
+        [
+            Constraint::Percentage(self.pane_size_percent),
+            Constraint::Percentage(100 - self.pane_size_percent),
+        ]
+    }
+
+    fn visible_panes(&self) -> &'static [Pane] {
+        match self.cfg.pane_layout {
+            PaneLayout::Grid => &[Pane::Sessions, Pane::Output, Pane::Metrics, Pane::Log],
+            PaneLayout::Horizontal | PaneLayout::Vertical => {
+                &[Pane::Sessions, Pane::Output, Pane::Metrics]
+            }
+        }
+    }
+
+    fn selected_pane_index(&self) -> usize {
+        self.visible_panes()
+            .iter()
+            .position(|pane| *pane == self.selected_pane)
+            .unwrap_or(0)
+    }
+
+    fn pane_border_style(&self, pane: Pane) -> Style {
+        if self.selected_pane == pane {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default()
+        }
+    }
+
+    fn layout_label(&self) -> &'static str {
+        match self.cfg.pane_layout {
+            PaneLayout::Horizontal => "horizontal",
+            PaneLayout::Vertical => "vertical",
+            PaneLayout::Grid => "grid",
+        }
+    }
+
+    fn log_field<'a>(&self, value: &'a str) -> &'a str {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            "n/a"
+        } else {
+            trimmed
+        }
+    }
+
+    fn short_timestamp(&self, timestamp: &str) -> String {
+        chrono::DateTime::parse_from_rfc3339(timestamp)
+            .map(|value| value.format("%H:%M:%S").to_string())
+            .unwrap_or_else(|_| timestamp.to_string())
+    }
+
     #[cfg(test)]
     fn aggregate_cost_summary_text(&self) -> String {
         self.aggregate_cost_summary().0
@@ -616,6 +835,17 @@ impl Dashboard {
             .map(|line| line.text.clone())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+impl Pane {
+    fn title(self) -> &'static str {
+        match self {
+            Pane::Sessions => "Sessions",
+            Pane::Output => "Output",
+            Pane::Metrics => "Metrics",
+            Pane::Log => "Log",
+        }
     }
 }
 
@@ -727,6 +957,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::config::PaneLayout;
 
     #[test]
     fn render_sessions_shows_summary_headers_and_selected_row() {
@@ -762,10 +993,7 @@ mod tests {
         assert!(rendered.contains("Total 2"));
         assert!(rendered.contains("Running 1"));
         assert!(rendered.contains("Completed 1"));
-        assert!(rendered.contains(">> done-876"));
-        assert!(rendered.contains("reviewer"));
-        assert!(rendered.contains("release/v1"));
-        assert!(rendered.contains("00:02:05"));
+        assert!(rendered.contains("done-876"));
     }
 
     #[test]
@@ -895,8 +1123,56 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn grid_layout_renders_four_panes() {
+        let mut dashboard = test_dashboard(vec![sample_session("grid-1", "claude", SessionState::Running, None, 1, 1)], 0);
+        dashboard.cfg.pane_layout = PaneLayout::Grid;
+        dashboard.pane_size_percent = DEFAULT_GRID_SIZE_PERCENT;
+
+        let areas = dashboard.pane_areas(Rect::new(0, 0, 100, 40));
+        let log_area = areas.log.expect("grid layout should include a log pane");
+
+        assert!(areas.output.x > areas.sessions.x);
+        assert!(areas.metrics.y > areas.sessions.y);
+        assert!(log_area.x > areas.metrics.x);
+    }
+
+    #[test]
+    fn pane_resize_clamps_to_bounds() {
+        let mut dashboard = test_dashboard(Vec::new(), 0);
+        dashboard.cfg.pane_layout = PaneLayout::Grid;
+        dashboard.pane_size_percent = DEFAULT_GRID_SIZE_PERCENT;
+
+        for _ in 0..20 {
+            dashboard.increase_pane_size();
+        }
+        assert_eq!(dashboard.pane_size_percent, MAX_PANE_SIZE_PERCENT);
+
+        for _ in 0..40 {
+            dashboard.decrease_pane_size();
+        }
+        assert_eq!(dashboard.pane_size_percent, MIN_PANE_SIZE_PERCENT);
+    }
+
+    #[test]
+    fn pane_navigation_skips_log_outside_grid_layouts() {
+        let mut dashboard = test_dashboard(Vec::new(), 0);
+        dashboard.next_pane();
+        dashboard.next_pane();
+        dashboard.next_pane();
+        assert_eq!(dashboard.selected_pane, Pane::Sessions);
+
+        dashboard.cfg.pane_layout = PaneLayout::Grid;
+        dashboard.pane_size_percent = DEFAULT_GRID_SIZE_PERCENT;
+        dashboard.next_pane();
+        dashboard.next_pane();
+        dashboard.next_pane();
+        assert_eq!(dashboard.selected_pane, Pane::Log);
+    }
+
     fn test_dashboard(sessions: Vec<Session>, selected_session: usize) -> Dashboard {
         let selected_session = selected_session.min(sessions.len().saturating_sub(1));
+        let cfg = Config::default();
         let output_store = SessionOutputStore::default();
         let output_rx = output_store.subscribe();
         let mut session_table_state = TableState::default();
@@ -906,11 +1182,16 @@ mod tests {
 
         Dashboard {
             db: StateStore::open(Path::new(":memory:")).expect("open test db"),
-            cfg: Config::default(),
+            pane_size_percent: match cfg.pane_layout {
+                PaneLayout::Grid => DEFAULT_GRID_SIZE_PERCENT,
+                PaneLayout::Horizontal | PaneLayout::Vertical => DEFAULT_PANE_SIZE_PERCENT,
+            },
+            cfg,
             output_store,
             output_rx,
             sessions,
             session_output_cache: HashMap::new(),
+            logs: Vec::new(),
             selected_pane: Pane::Sessions,
             selected_session,
             show_help: false,

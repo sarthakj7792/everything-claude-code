@@ -1,32 +1,36 @@
 ---
 paths:
   - "**/*.dart"
+  - "**/pubspec.yaml"
+  - "**/analysis_options.yaml"
 ---
-# Dart Coding Style
+# Dart/Flutter Coding Style
 
 > This file extends [common/coding-style.md](../common/coding-style.md) with Dart and Flutter-specific content.
 
 ## Formatting
 
-- **dart format** for all Dart files — enforce via CI and pre-commit hooks
+- **dart format** for all `.dart` files — enforced in CI (`dart format --set-exit-if-changed .`)
 - Use `analysis_options.yaml` with `flutter_lints` or `very_good_analysis` for strict lint rules
-- Line length: 80 characters (Dart default)
+- Line length: 80 characters (dart format default)
+- Trailing commas on multi-line argument/parameter lists to improve diffs and formatting
 
 ## Immutability
 
-- Prefer `final` over `var` — default to `final` and only use `var` when reassignment is required
-- Use `const` constructors wherever possible for compile-time constants and widget trees
+- Prefer `final` for local variables and `const` for compile-time constants
+- Use `const` constructors wherever all fields are `final`
 - Use `freezed` or hand-written `copyWith` for immutable data classes
-- Use `UnmodifiableListView` / `List.unmodifiable()` for public collection APIs
+- Return unmodifiable collections from public APIs (`List.unmodifiable`, `Map.unmodifiable`)
+- Use `copyWith()` for state mutations in immutable state classes
 
 ```dart
 // BAD
-var name = 'Alice';
-var items = [1, 2, 3];
+var count = 0;
+List<String> items = ['a', 'b'];
 
 // GOOD
-final name = 'Alice';
-final items = List.unmodifiable([1, 2, 3]);
+final count = 0;
+const items = ['a', 'b'];
 
 // GOOD — const widget tree
 const Padding(
@@ -37,26 +41,40 @@ const Padding(
 
 ## Naming
 
-Follow Effective Dart conventions:
-- `lowerCamelCase` for variables, functions, parameters, and named constants
-- `UpperCamelCase` for classes, enums, type aliases, and extensions
-- `lowercase_with_underscores` for file names, library names, and package names
-- `_leadingUnderscore` for private members (library-private in Dart)
+Follow Dart conventions:
+- `camelCase` for variables, parameters, and named constructors
+- `PascalCase` for classes, enums, typedefs, and extensions
+- `snake_case` for file names and library names
+- `SCREAMING_SNAKE_CASE` for constants declared with `const` at top level
+- Prefix private members with `_`
 - Prefix boolean getters/properties with `is`, `has`, `can`, `should`
+- Extension names describe the type they extend: `StringExtensions`, not `MyHelpers`
 
 ## Null Safety
 
-- Never use `!` (bang operator) unless you can guarantee non-null — prefer `?.`, `??`, or null checks
-- Use `late` only when initialization is guaranteed before access (e.g., `late final` in `initState`)
+- Avoid `!` (bang operator) — prefer `?.`, `??`, `if (x != null)`, or Dart 3 pattern matching; reserve `!` only where a null value is a programming error and crashing is the right behaviour
+- Avoid `late` unless initialization is guaranteed before first use (prefer nullable or constructor init)
+- Use `required` for constructor parameters that must always be provided
 - Return nullable types from functions that can legitimately have no result
-- Use `required` keyword for mandatory named parameters
 
 ```dart
-// BAD — bang operator
+// BAD — crashes at runtime if user is null
 final name = user!.name;
 
 // GOOD — null-aware operators
 final name = user?.name ?? 'Unknown';
+
+// GOOD — Dart 3 pattern matching (exhaustive, compiler-checked)
+final name = switch (user) {
+  User(:final name) => name,
+  null => 'Unknown',
+};
+
+// GOOD — early-return null guard
+String getUserName(User? user) {
+  if (user == null) return 'Unknown';
+  return user.name; // promoted to non-null after the guard
+}
 
 // GOOD — null check with flow analysis
 if (user != null) {
@@ -79,7 +97,43 @@ final items = <String>[];
 List<Item> getFilteredItems(String query) { ... }
 ```
 
-## Enums and Sealed Classes
+## Sealed Types and Pattern Matching (Dart 3+)
+
+Use sealed classes to model closed state hierarchies:
+
+```dart
+sealed class AsyncState<T> {
+  const AsyncState();
+}
+
+final class Loading<T> extends AsyncState<T> {
+  const Loading();
+}
+
+final class Success<T> extends AsyncState<T> {
+  const Success(this.data);
+  final T data;
+}
+
+final class Failure<T> extends AsyncState<T> {
+  const Failure(this.error);
+  final Object error;
+}
+```
+
+Always use exhaustive `switch` with sealed types — no default/wildcard:
+
+```dart
+// BAD
+if (state is Loading) { ... }
+
+// GOOD
+return switch (state) {
+  Loading() => const CircularProgressIndicator(),
+  Success(:final data) => DataWidget(data),
+  Failure(:final error) => ErrorWidget(error.toString()),
+};
+```
 
 Use enhanced enums for closed value sets:
 
@@ -94,44 +148,33 @@ enum OrderStatus {
 }
 ```
 
-Use `sealed class` (Dart 3+) for closed type hierarchies with exhaustive pattern matching:
-
-```dart
-sealed class UiState<T> {}
-class Loading<T> extends UiState<T> {}
-class Success<T> extends UiState<T> {
-  const Success(this.data);
-  final T data;
-}
-class Failure<T> extends UiState<T> {
-  const Failure(this.message);
-  final String message;
-}
-
-// Exhaustive switch
-String describe(UiState<String> state) => switch (state) {
-  Loading() => 'Loading...',
-  Success(:final data) => 'Got: $data',
-  Failure(:final message) => 'Error: $message',
-};
-```
-
 ## Error Handling
 
 - Use custom exception classes for domain errors
-- Use `Result` types (via `fpdart`, `dartz`, or custom sealed classes) for expected failures
+- Specify exception types in `on` clauses — never use bare `catch (e)`
+- Never catch `Error` subtypes — they indicate programming bugs
+- Use `Result`-style types (via `fpdart`, `dartz`, or custom sealed classes) for recoverable/expected failures
 - Reserve `try-catch` for truly unexpected errors
-- Never catch `Error` subtypes (e.g., `StackOverflowError`, `OutOfMemoryError`)
+- Avoid using exceptions for control flow
 
 ```dart
-// BAD — using exceptions for control flow
+// BAD
 try {
-  final user = await repository.getUser(id);
-} on NotFoundException {
-  return null;
+  await fetchUser();
+} catch (e) {
+  log(e.toString());
 }
 
-// GOOD — nullable return
+// GOOD
+try {
+  await fetchUser();
+} on NetworkException catch (e) {
+  log('Network error: ${e.message}');
+} on NotFoundException {
+  handleNotFound();
+}
+
+// GOOD — nullable return instead of exception for control flow
 final user = await repository.findUser(id); // returns User?
 ```
 
@@ -155,9 +198,37 @@ Padding(padding: EdgeInsets.all(16.w));
 Text('Hello', style: TextStyle(fontSize: 14.sp));
 ```
 
+## Async / Futures
+
+- Always `await` Futures or explicitly call `unawaited()` to signal intentional fire-and-forget
+- Never mark a function `async` if it never `await`s anything
+- Use `Future.wait` / `Future.any` for concurrent operations
+- Check `context.mounted` before using `BuildContext` after any `await` (Flutter 3.7+)
+
+```dart
+// BAD — ignoring Future
+fetchData(); // fire-and-forget without marking intent
+
+// GOOD
+unawaited(fetchData()); // explicit fire-and-forget
+await fetchData();      // or properly awaited
+```
+
+## Imports
+
+- Use `package:` imports throughout — never relative imports (`../`) for cross-feature or cross-layer code
+- Order: `dart:` → external `package:` → internal `package:` (same package)
+- No unused imports — `dart analyze` enforces this with `unused_import`
+
 ## Extension Methods
 
 Use extensions for utility operations, but keep them discoverable:
 - Place in a file named after the receiver type (`string_extensions.dart`, `context_extensions.dart`)
 - Keep scope limited — don't add extensions to `Object` or overly generic types
 - Prefer named extensions over anonymous ones for discoverability
+
+## Code Generation
+
+- Generated files (`.g.dart`, `.freezed.dart`, `.gr.dart`) must be committed or gitignored consistently — pick one strategy per project
+- Never manually edit generated files
+- Keep generator annotations (`@JsonSerializable`, `@freezed`, `@riverpod`, etc.) on the canonical source file only

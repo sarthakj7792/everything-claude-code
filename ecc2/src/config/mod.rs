@@ -2,6 +2,23 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneLayout {
+    #[default]
+    Horizontal,
+    Vertical,
+    Grid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RiskThresholds {
+    pub review: f64,
+    pub confirm: f64,
+    pub block: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -15,6 +32,8 @@ pub struct Config {
     pub cost_budget_usd: f64,
     pub token_budget: u64,
     pub theme: Theme,
+    pub pane_layout: PaneLayout,
+    pub risk_thresholds: RiskThresholds,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,11 +56,19 @@ impl Default for Config {
             cost_budget_usd: 10.0,
             token_budget: 500_000,
             theme: Theme::Dark,
+            pane_layout: PaneLayout::Horizontal,
+            risk_thresholds: Self::RISK_THRESHOLDS,
         }
     }
 }
 
 impl Config {
+    pub const RISK_THRESHOLDS: RiskThresholds = RiskThresholds {
+        review: 0.35,
+        confirm: 0.60,
+        block: 0.85,
+    };
+
     pub fn load() -> Result<Self> {
         let config_path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -58,9 +85,15 @@ impl Config {
     }
 }
 
+impl Default for RiskThresholds {
+    fn default() -> Self {
+        Config::RISK_THRESHOLDS
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, PaneLayout};
 
     #[test]
     fn default_includes_positive_budget_thresholds() {
@@ -88,5 +121,24 @@ theme = "Dark"
 
         assert_eq!(config.cost_budget_usd, defaults.cost_budget_usd);
         assert_eq!(config.token_budget, defaults.token_budget);
+        assert_eq!(config.pane_layout, defaults.pane_layout);
+        assert_eq!(config.risk_thresholds, defaults.risk_thresholds);
+    }
+
+    #[test]
+    fn default_pane_layout_is_horizontal() {
+        assert_eq!(Config::default().pane_layout, PaneLayout::Horizontal);
+    }
+
+    #[test]
+    fn pane_layout_deserializes_from_toml() {
+        let config: Config = toml::from_str(r#"pane_layout = "grid""#).unwrap();
+
+        assert_eq!(config.pane_layout, PaneLayout::Grid);
+    }
+
+    #[test]
+    fn default_risk_thresholds_are_applied() {
+        assert_eq!(Config::default().risk_thresholds, Config::RISK_THRESHOLDS);
     }
 }
