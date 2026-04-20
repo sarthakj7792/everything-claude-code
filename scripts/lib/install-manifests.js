@@ -19,6 +19,7 @@ const LEGACY_COMPAT_BASE_MODULE_IDS_BY_TARGET = Object.freeze({
   antigravity: ['rules-core', 'agents-core', 'commands-core']
 });
 const LEGACY_LANGUAGE_ALIAS_TO_CANONICAL = Object.freeze({
+  c: 'c',
   cpp: 'cpp',
   csharp: 'csharp',
   dart: 'dart',
@@ -36,6 +37,7 @@ const LEGACY_LANGUAGE_ALIAS_TO_CANONICAL = Object.freeze({
   typescript: 'typescript'
 });
 const LEGACY_LANGUAGE_EXTRA_MODULE_IDS = Object.freeze({
+  c: ['framework-language'],
   cpp: ['framework-language'],
   csharp: ['framework-language'],
   dart: ['framework-language'],
